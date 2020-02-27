@@ -60,7 +60,19 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
 
   private _snapDuration = 500;
 
+  private _scrollSpeed = 1;
+
+  private _momentumScrollingEnabled = false;
+
   private _isDragging = false;
+
+  private _isScrollingAfterDrag = false;
+
+  private _scrollingAfterDragTimeout = null;
+
+  private _scrollDirectionX = 0;
+
+  private _scrollDirectionY = 0;
 
   private _onMouseMoveListener: Function;
 
@@ -207,6 +219,14 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
   get snapDuration() { return this._snapDuration; }
   set snapDuration(value: number) { this._snapDuration = value; }
 
+  @Input('scroll-speed')
+  get scrollSpeed() { return this._scrollSpeed; }
+  set scrollSpeed(value: number) { this._scrollSpeed = value; }
+
+  @Input('momentum-scrolling-enabled')
+  get momentumScrollingEnabled() { return this._momentumScrollingEnabled; }
+  set momentumScrollingEnabled(value: boolean) { this._momentumScrollingEnabled = value; }
+
   constructor(
     @Inject(ElementRef) private _elementRef: ElementRef,
     @Inject(Renderer2) private _renderer: Renderer2,
@@ -293,7 +313,12 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
       // Workaround for prevent scroll stuck if browser lost focus
       // MouseEvent.buttons not support by Safari
       // tslint:disable-next-line:deprecation
+
+
       if (!event.buttons && !event.which) {
+        if (this._isScrollingAfterDrag) {
+          return;
+        }
         return this.onMouseUpHandler(event);
       }
 
@@ -302,7 +327,8 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
 
       // Drag X
       if (!this.xDisabled && !this.dragDisabled) {
-        const clientX = (event as MouseEvent).clientX;
+        const clientX = (event as MouseEvent).clientX * this._scrollSpeed;
+        this._scrollDirectionX = this.downX - clientX;
         this._contentRef.nativeElement.scrollLeft =
           this._contentRef.nativeElement.scrollLeft - clientX + this.downX;
         this.downX = clientX;
@@ -310,12 +336,56 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
 
       // Drag Y
       if (!this.yDisabled && !this.dragDisabled) {
-        const clientY = (event as MouseEvent).clientY;
+        const clientY = (event as MouseEvent).clientY * this._scrollSpeed;
+        this._scrollDirectionY = this.downY - clientY;
         this._contentRef.nativeElement.scrollTop =
           this._contentRef.nativeElement.scrollTop - clientY + this.downY;
         this.downY = clientY;
       }
     }
+  }
+
+  keepScrollingAfterMouseUp(event: MouseEvent) {
+    this._isScrollingAfterDrag = true;
+    let currentSpeedX = this._scrollSpeed * this._scrollDirectionX;
+    let currentSpeedY = this._scrollSpeed * this._scrollDirectionY;
+
+    currentSpeedX = Math.max(currentSpeedX, -10);
+    currentSpeedX = Math.min(currentSpeedX, 10);
+    currentSpeedY = Math.max(currentSpeedY, -10);
+    currentSpeedY = Math.min(currentSpeedY, 10);
+
+    if (this._xDisabled) {
+      currentSpeedX = 0;
+    }
+    if (this.yDisabled) {
+      currentSpeedY = 0;
+    }
+
+    this._scrollingAfterDragTimeout = () => {
+      this._contentRef.nativeElement.scrollLeft += currentSpeedX;
+      this._contentRef.nativeElement.scrollTop += currentSpeedY;
+
+      currentSpeedX *= 0.8;
+      currentSpeedY *= 0.8;
+
+      this.checkNavStatus();
+      if (Math.abs(currentSpeedX) > 1 || Math.abs(currentSpeedY) > 1) {
+        setTimeout(this._scrollingAfterDragTimeout, 20);
+      } else {
+        this._isScrollingAfterDrag = false;
+        this.isPressed = false;
+        this._pointerEvents = 'auto';
+        this._setIsDragging(false);
+        if (!this.snapDisabled) {
+          this.locateCurrentIndex(true);
+        } else {
+          this.locateCurrentIndex();
+        }
+        this._stopGlobalListening();
+      }
+    };
+    this._scrollingAfterDragTimeout();
   }
 
   onMouseDownHandler(event: MouseEvent) {
@@ -330,8 +400,8 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
     this.isPressed = true;
 
     const mouseEvent = event as MouseEvent;
-    this.downX = mouseEvent.clientX;
-    this.downY = mouseEvent.clientY;
+    this.downX = mouseEvent.clientX * this._scrollSpeed;
+    this.downY = mouseEvent.clientY * this._scrollSpeed;
 
     clearTimeout(this.scrollToTimer as number);
   }
@@ -352,15 +422,19 @@ export class DragScrollComponent implements OnDestroy, AfterViewInit, OnChanges,
 
   onMouseUpHandler(event: MouseEvent) {
     if (this.isPressed) {
-      this.isPressed = false;
-      this._pointerEvents = 'auto';
-      this._setIsDragging(false);
-      if (!this.snapDisabled) {
-        this.locateCurrentIndex(true);
+      if (this._momentumScrollingEnabled) {
+        return this.keepScrollingAfterMouseUp(event);
       } else {
-        this.locateCurrentIndex();
+        this.isPressed = false;
+        this._pointerEvents = 'auto';
+        this._setIsDragging(false);
+        if (!this.snapDisabled) {
+          this.locateCurrentIndex(true);
+        } else {
+          this.locateCurrentIndex();
+        }
+        this._stopGlobalListening();
       }
-      this._stopGlobalListening();
     }
   }
 
